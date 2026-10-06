@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Parking</title>
+<style>
+:root{--asphalt:#15171b;--panel:#1e2126;--paint:#f2c200;--free:#3ddc84;--busy:#ff5a4f;--held:#6aa8ff;--text:#eef0f2;--mute:#8b929b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--asphalt);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:16px;max-width:520px;margin-inline:auto}
+h1{font-size:1.1rem;margin:0;font-weight:700;display:flex;justify-content:space-between;align-items:center}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--busy)}.dot.on{background:var(--free)}
+.sign{margin:14px 0;padding:18px;border:3px solid var(--paint);border-radius:10px;text-align:center;background:var(--panel)}
+.sign b{display:block;font-size:4.5rem;line-height:1;font-weight:800;color:var(--paint);font-variant-numeric:tabular-nums}
+.sign span{color:var(--mute);font-size:.95rem}
+.bays{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.bay{height:110px;border:2px dashed var(--paint);border-top:0;border-radius:0 0 6px 6px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;background:var(--panel);transition:background .25s}
+.bay strong{font-size:1.3rem}.bay small{color:var(--mute)}
+.bay.free{cursor:pointer}.bay.free strong{color:var(--free)}
+.bay.busy{background:#2b1d1e}.bay.busy strong{color:var(--busy)}
+.bay.reserved{border-color:var(--held)}.bay.reserved strong{color:var(--held)}
+.bay.sel{outline:3px solid var(--paint);outline-offset:2px;background:#2a2712}
+.tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:14px}
+.tabs button{background:var(--panel);color:var(--mute);padding:10px 4px;font-size:.9rem}
+.tabs button.on{background:var(--paint);color:#111}
+.tab{display:none}.tab.on{display:block}
+.card{background:var(--panel);border-radius:10px;padding:16px;margin-top:14px}
+.card h2{font-size:1rem;margin:0 0 10px}
+button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:12px 14px;cursor:pointer;color:#111;background:var(--paint);width:100%}
+button:active{transform:scale(.98)}button:disabled{opacity:.5}
+button.alt{background:transparent;color:var(--text);border:2px solid var(--mute)}
+button:focus-visible,input:focus-visible{outline:3px solid #fff;outline-offset:2px}
+label{display:block;font-size:.85rem;color:var(--mute);margin:10px 0 4px}
+input{width:100%;font:700 1.5rem ui-monospace,Consolas,monospace;letter-spacing:.25em;text-align:center;text-transform:uppercase;padding:12px;border-radius:8px;border:2px solid var(--mute);background:var(--asphalt);color:var(--text)}
+input.txt{font:600 1.1rem system-ui,sans-serif;letter-spacing:.08em;padding:10px}
+.note{color:var(--mute);font-size:.85rem;margin:8px 0 0}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+.chip{display:inline-block;margin-bottom:12px;padding:6px 10px;border-radius:6px;font-size:.85rem;color:var(--mute);background:var(--asphalt)}
+.chip.hot{color:var(--asphalt);background:var(--paint);font-weight:700}
+.ticket{border-left:5px solid var(--paint)}
+.tcode{display:block;font:800 2.2rem ui-monospace,Consolas,monospace;letter-spacing:.25em;text-align:center;padding:10px;border-radius:8px;background:var(--asphalt)}
+#toast{position:fixed;left:16px;right:16px;bottom:16px;max-width:488px;margin:auto;padding:12px 14px;border-radius:8px;font-weight:600;display:none;z-index:9}
+#toast.ok{background:var(--free);color:#08210f}#toast.err{background:var(--busy);color:#2a0805}
+dialog{border:0;border-radius:12px;padding:20px;background:#fff;color:#111;width:min(92vw,380px)}
+dialog::backdrop{background:rgba(0,0,0,.65)}
+dialog h3{margin:0 0 12px}dialog dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0 0 14px}
+dialog dt{color:#555}dialog dd{margin:0;text-align:right;font-weight:600}
+dialog .total{font-size:1.6rem;font-weight:800;border-top:2px dashed #999;padding-top:10px;margin-bottom:14px;display:flex;justify-content:space-between}
+</style>
+</head>
+<body>
+<h1>Smart Parking <i class="dot" id="conn" title="Đang kết nối..."></i></h1>
+<p class="note" id="connectionStatus" role="status" aria-live="polite">Đang kết nối máy chủ...</p>
+
+<section class="sign" aria-live="polite"><b id="free">-</b><span id="total">chỗ trống</span></section>
+<section class="bays" id="bays"></section>
+
+<nav class="tabs" id="tabs">
+  <button data-t="res" class="on">Đặt chỗ</button>
+  <button data-t="in">Vào bãi</button>
+  <button data-t="out">Trả bãi</button>
+</nav>
+
+<section class="card tab on" id="t-res">
+  <h2>Đặt chỗ trước</h2>
+  <p class="note" id="pick"></p>
+  <label for="plate">Biển số xe</label>
+  <input class="txt" id="plate" maxlength="12" placeholder="59A1-123.45" autocomplete="off">
+  <label for="phone">Số điện thoại (không bắt buộc)</label>
+  <input class="txt" id="phone" type="tel" maxlength="12" placeholder="09xxxxxxxx" autocomplete="off">
+  <div class="row" style="grid-template-columns:1fr"><button id="btnRes">Đặt chỗ</button></div>
+  <p class="note" id="holdNote"></p>
+</section>
+
+<section class="card tab" id="t-in">
+  <h2>Vào bãi</h2>
+  <span class="chip" id="gIn">Cổng vào: chờ xe</span>
+  <input id="codeIn" maxlength="6" placeholder="A1B2C3" autocomplete="off" aria-label="Mã đặt chỗ">
+  <div class="row" style="grid-template-columns:1fr"><button id="btnIn">Xác nhận mã và mở cổng</button></div>
+  <p class="note">Nhập mã khi xe đã dừng trước cổng vào.</p>
+</section>
+
+<section class="card tab" id="t-out">
+  <h2>Trả bãi</h2>
+  <span class="chip" id="gOut">Cổng ra: chờ xe</span>
+  <input id="codeOut" maxlength="6" placeholder="A1B2C3" autocomplete="off" aria-label="Mã đặt chỗ">
+  <div class="row" style="grid-template-columns:1fr"><button id="btnOut">Xem phí</button></div>
+  <p class="note" id="rateNote">Cổng ra chỉ mở sau khi bạn xác nhận thanh toán.</p>
+</section>
+
+<section class="card ticket" id="ticket" hidden></section>
+
+<div id="toast" role="status"></div>
+
+<dialog id="bill">
+  <h3>Hoá đơn gửi xe</h3>
+  <dl>
+    <dt>Mã</dt><dd id="bCode"></dd>
+    <dt>Biển số</dt><dd id="bPlate"></dd>
+    <dt>Thời gian đỗ</dt><dd id="bDur"></dd>
+    <dt>Chu kỳ tính phí</dt><dd id="bHours"></dd>
+    <dt>Đơn giá</dt><dd id="bRate"></dd>
+  </dl>
+  <div class="total"><span>Tổng</span><span id="bFee"></span></div>
+  <div class="row"><button class="alt" id="bNo">Quay lại</button><button id="bPay">Thanh toán, mở cổng</button></div>
+</dialog>
+
+<script>
+// Để trống = cùng domain với trang (Nginx). Hoặc: 'https://parking.example.com'
+const API = '';
+const DEMO = /[?&]demo/.test(location.search);   // mở index.html?demo để xem thử không cần server
+const HOST = API ? new URL(API).host : location.host;
+const KEY = 'parking_ticket';
+const pending = new Set();
+const $ = id => document.getElementById(id);
+const vnd = n => Number(n).toLocaleString('vi-VN') + ' đ';
+const SL = {free: 'Trống', reserved: 'Đã đặt', busy: 'Đang sử dụng'};
+const GL = {idle: 'chờ xe', wait: 'xe đang chờ, nhập mã', open: 'đang mở'};
+
+let ws, link = false, toastTimer, sel = 0, quoteCode = '';
+let st = {free: 0, total: 0, slots: [], entry: 'idle', exit: 'idle', online: false};
+let cfg = {rate: 10000, holdSec: 30, holdMin: 0.5, billingPeriodSec: 60};
+let syncing = false, lastSyncAttempt = 0;
+let ticket = (() => { try { return DEMO ? null : JSON.parse(localStorage.getItem(KEY)); } catch (_) { return null; } })();
+const save = () => {
+  if (DEMO) return;
+  try { ticket ? localStorage.setItem(KEY, JSON.stringify(ticket)) : localStorage.removeItem(KEY); } catch (_) {}
+};
+const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
+const isOnline = () => link && st.online === true && st.resetting !== true;
+
+function toast(msg, ok) {
+  const t = $('toast'); t.textContent = msg; t.className = ok ? 'ok' : 'err'; t.style.display = 'block';
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.style.display = 'none', 3500);
+}
+
+function render() {
+  if (sel && st.slots[sel - 1] !== 'free') sel = 0;
+  $('free').textContent = st.free;
+  $('total').textContent = 'trên ' + st.total + ' chỗ còn trống';
+  $('bays').innerHTML = st.slots.map((s, i) =>
+    `<div class="bay ${s}${sel === i + 1 ? ' sel' : ''}" data-n="${i + 1}"><small>Chỗ ${i + 1}</small><strong>${SL[s]}</strong>` +
+    `${ticket && ticket.slot === i + 1 ? '<small>Của bạn</small>' : ''}</div>`).join('');
+  $('pick').textContent = sel ? 'Đã chọn chỗ ' + sel + '.' : 'Chạm vào một ô trống phía trên để chọn chỗ.';
+  $('gIn').textContent = 'Cổng vào: ' + GL[st.entry]; $('gIn').className = 'chip' + (st.entry === 'wait' ? ' hot' : '');
+  $('gOut').textContent = 'Cổng ra: ' + GL[st.exit]; $('gOut').className = 'chip' + (st.exit === 'wait' ? ' hot' : '');
+  const up = isOnline();
+  $('conn').classList.toggle('on', up);
+  $('conn').title = !link ? 'Mất kết nối máy chủ' : st.online ? 'Đang hoạt động' : 'Thiết bị ESP32 đang offline';
+  $('connectionStatus').textContent = DEMO ? 'Chế độ demo: dữ liệu giả, không điều khiển phần cứng.' :
+    !link ? 'Mất kết nối máy chủ. Đang thử kết nối lại...' :
+    !st.online ? 'ESP32 offline hoặc chưa có trạng thái. Tạm dừng đặt chỗ và mở cổng.' :
+    st.resetting ? 'Đang reset bãi và đồng bộ ESP32. Tạm dừng đặt chỗ và mở cổng.' :
+    'ESP32 online. Chỗ đỗ được quản lý theo vé; dùng mã tại cổng vào và checkout.';
+  $('btnRes').disabled = !up || !sel || !!ticket || pending.has('/api/reserve');
+  $('btnIn').disabled = !up || st.entry !== 'wait' || pending.has('/api/checkin');
+  const retryOpen = st.exit === 'open' && ticket?.status === 'exit_pending';
+  const exitReady = cfg.paymentSimulation === true || st.exit === 'wait' || retryOpen;
+  $('btnOut').disabled = !up || !exitReady || pending.has('/api/checkout/quote') || pending.has('/api/checkout/confirm');
+  $('bPay').disabled = !up || !exitReady || !quoteCode || pending.has('/api/checkout/confirm');
+}
+
+function showTicket() {
+  const t = ticket, box = $('ticket'); box.hidden = !t; if (!t) return;
+  const held = t.status === 'reserved';
+  const exiting = t.status === 'exit_pending';
+  box.innerHTML = `<h2>Vé của bạn</h2><output class="tcode">${escapeHtml(t.code)}</output>` +
+    `<p class="note">Chỗ ${escapeHtml(t.slot)} - Biển số ${escapeHtml(t.plate)}</p>` +
+    `<p class="note">${held ? 'Giữ chỗ còn <b id="cd"></b>. Hãy tới cổng vào và nhập mã.' : exiting ? 'Đã xác nhận thanh toán, đang chờ xe ra. Chỗ và mã vẫn được giữ đến khi cảm biến hết xe và cổng đóng.' : 'Xe đang đỗ trong bãi. Khi ra, nhập mã ở tab Trả bãi.'}</p>` +
+    `<div class="row"><button class="alt" id="copy">Sao chép mã</button>${held ? '<button class="alt" id="cancel">Huỷ đặt chỗ</button>' : ''}</div>`;
+  $('codeIn').value = t.code;
+  $('codeOut').value = t.code;
+  $('btnOut').textContent = exiting ? 'Xem phí đã xác nhận / thử lại' : 'Xem phí';
+}
+
+function clearTicket() {
+  const code = ticket?.code;
+  quoteCode = ''; $('bill').close();
+  for (const id of ['codeIn', 'codeOut']) if ($(id).value.trim().toUpperCase() === code) $(id).value = '';
+  ticket = null; save(); showTicket(); $('btnOut').textContent = 'Xem phí'; render();
+}
+
+// Restore a manually entered code too; localStorage is a cache, MySQL owns the state.
+function rememberTicket(d) {
+  if (!d.code || (ticket && ticket.code !== d.code)) return;
+  if (['EXPIRED', 'CANCELLED', 'COMPLETED'].includes(d.status)) { clearTicket(); return; }
+  if (!['RESERVED', 'PARKED', 'EXIT_PENDING'].includes(d.status)) return;
+  ticket = {...ticket, code: d.code, slot: d.slot, plate: d.plate,
+    status: d.status.toLowerCase(), expiresAt: d.expiresAt || 0,
+    operationId: d.operationId, fee: d.fee, paidAt: d.paidAt};
+  save(); showTicket(); render();
+}
+
+async function api(path, body) {
+  if (DEMO) return mock(path, body);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const r = await fetch(API + path, {
+      method: body ? 'POST' : 'GET', headers: {'Content-Type': 'application/json'},
+      body: body ? JSON.stringify(body) : undefined, signal: controller.signal
+    });
+    const data = await r.json();
+    if (!r.ok && data.ok !== false) throw new Error('HTTP ' + r.status);
+    return data;
+  } finally { clearTimeout(timeout); }
+}
+async function call(path, body) {
+  const hardware = ['/api/reserve', '/api/checkin', '/api/checkout/quote', '/api/checkout/confirm'].includes(path);
+  if (hardware && !isOnline()) { toast('ESP32 chưa kết nối. Vui lòng thử lại khi thiết bị online.', false); return null; }
+  if (path === '/api/checkin' && st.entry !== 'wait') { toast('Hãy dừng xe trước cảm biến cổng vào.', false); return null; }
+  const retryOpen = st.exit === 'open' && ticket?.status === 'exit_pending' && ticket.code === body?.code;
+  if (cfg.paymentSimulation !== true && ['/api/checkout/quote', '/api/checkout/confirm'].includes(path) && st.exit !== 'wait' && !retryOpen) { toast('Hãy dừng xe trước cảm biến cổng ra.', false); return null; }
+  if (pending.has(path)) return null;
+  pending.add(path); render();
+  try {
+    const d = await api(path, body);
+    if (!d.ok) { toast(d.msg || 'Có lỗi xảy ra', false); return null; }
+    return d;
+  } catch (_) {
+    toast('Chưa nhận được kết quả. Kiểm tra vé trước khi thử lại.', false);
+    // A request may have reached the server even if its response was lost.
+    if (ticket) sync();
+    return null;
+  } finally { pending.delete(path); render(); }
+}
+function codeOf(id) {
+  const c = $(id).value.trim().toUpperCase();
+  if (!/^[A-Z0-9]{6}$/.test(c)) { toast('Nhập mã gồm 6 chữ cái hoặc chữ số', false); return null; }
+  return c;
+}
+
+// ---- Đặt chỗ ----
+$('plate').oninput = e => e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9.\- ]/g, '');
+$('bays').onclick = e => {
+  const b = e.target.closest('.bay');
+  if (!isOnline() || !b || !b.classList.contains('free')) return;
+  sel = +b.dataset.n; render();
+};
+$('btnRes').onclick = async () => {
+  if (ticket && !DEMO) await sync();
+  const plate = $('plate').value.trim();
+  if (ticket) return toast('Bạn đã có một vé đang dùng', false);
+  if (!sel) return toast('Chọn một chỗ trống ở phía trên', false);
+  if (plate.length < 5) return toast('Nhập biển số xe', false);
+  const d = await call('/api/reserve', {slot: sel, plate, phone: $('phone').value.trim()});
+  if (!d) return;
+  ticket = {code: d.code, slot: d.slot, plate, expiresAt: d.expiresAt, status: 'reserved'};
+  sel = 0; save(); showTicket(); render(); toast('Đặt chỗ thành công', true);
+};
+$('ticket').onclick = async e => {
+  if (e.target.id === 'copy') {
+    try { await navigator.clipboard.writeText(ticket.code); toast('Đã sao chép mã', true); } catch (_) {}
+  } else if (e.target.id === 'cancel') {
+    if (await call('/api/cancel', {code: ticket.code})) { clearTicket(); toast('Đã huỷ đặt chỗ', true); }
+  }
+};
+setInterval(() => {
+  if (!ticket || ticket.status !== 'reserved') return;
+  const s = Math.ceil((ticket.expiresAt - Date.now()) / 1000);
+  if (s <= 0) {
+    const cd = $('cd'); if (cd) cd.textContent = 'đang kiểm tra với máy chủ';
+    if (Date.now() - lastSyncAttempt >= 5000) sync();
+    return;
+  }
+  const cd = $('cd'); if (cd) cd.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}, 1000);
+
+// ---- Vào bãi ----
+$('btnIn').onclick = async () => {
+  const code = codeOf('codeIn'); if (!code) return;
+  if (!await call('/api/checkin', {code})) return;
+  toast('Mã hợp lệ, cổng vào đang mở', true);
+  if (ticket && ticket.code === code) { ticket.status = 'parked'; save(); showTicket(); render(); }
+  else if (!ticket) {
+    try { const d = await api('/api/ticket?code=' + encodeURIComponent(code)); if (d.ok) rememberTicket(d); } catch (_) {}
+  }
+};
+
+// ---- Trả bãi ----
+$('btnOut').onclick = async () => {
+  const code = codeOf('codeOut'); if (!code) return;
+  const d = await call('/api/checkout/quote', {code}); if (!d) return;
+  rememberTicket(d);
+  quoteCode = code;
+  render();
+  $('bCode').textContent = d.code; $('bPlate').textContent = d.plate || '-';
+  $('bDur').textContent = Math.floor(d.parked_sec / 3600) + ' giờ ' + Math.floor(d.parked_sec % 3600 / 60) + ' phút ' + d.parked_sec % 60 + ' giây';
+  const periodSec = Object.hasOwn(d, 'billingPeriodSec') ? d.billingPeriodSec : cfg.billingPeriodSec;
+  const unitLabel = periodSec == null ? 'chu kỳ đã xác nhận' : periodSec === 3600 ? 'giờ' : `chu kỳ ${periodSec} giây`;
+  $('bHours').textContent = d.hours + ' ' + unitLabel; $('bRate').textContent = vnd(d.rate) + ' / ' + unitLabel; $('bFee').textContent = vnd(d.fee);
+  $('bPay').textContent = d.status === 'EXIT_PENDING' ? 'Thử lại mở cổng (không tính thêm phí)' : 'Thanh toán, mở cổng';
+  $('bill').showModal();
+};
+$('bNo').onclick = () => { $('bill').close(); quoteCode = ''; render(); };
+$('bPay').onclick = async () => {
+  if (!quoteCode) return;
+  const code = quoteCode;
+  const d = await call('/api/checkout/confirm', {code}); if (!d) return;
+  $('bill').close(); rememberTicket(d);
+  toast(d.status === 'COMPLETED' ? 'Xe đã ra, vé đã kết thúc' : d.gateAcknowledged ?
+    'Đã xác nhận thanh toán, đang chờ xe ra' : 'Chưa xác nhận được cổng mở. Vé và chỗ vẫn được giữ; hãy kiểm tra rồi thử lại.', d.gateAcknowledged || d.status === 'COMPLETED');
+  quoteCode = ''; render();
+};
+
+// ---- Tabs ----
+$('tabs').onclick = e => {
+  const t = e.target.dataset.t; if (!t) return;
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b === e.target));
+  document.querySelectorAll('.tab').forEach(s => s.classList.toggle('on', s.id === 't-' + t));
+};
+
+// ---- Kết nối realtime ----
+function connect() {
+  if (!HOST) { render(); $('connectionStatus').textContent = 'Mở website từ máy chủ HTTPS để kết nối ESP32.'; return; }
+  const protocol = API ? new URL(API).protocol : location.protocol;
+  st.online = false;
+  ws = new WebSocket((protocol === 'https:' ? 'wss://' : 'ws://') + HOST + '/ws');
+  ws.onopen = () => { link = true; render(); sync(); };
+  ws.onclose = () => { link = false; st.online = false; render(); setTimeout(connect, 2000); };
+  ws.onerror = () => { link = false; st.online = false; render(); };
+  ws.onmessage = e => {
+    try {
+      const next = JSON.parse(e.data);
+      if (next.total !== 3 || !Array.isArray(next.slots) || next.slots.length !== 3 ||
+          !next.slots.every(s => Object.hasOwn(SL, s)) ||
+          !Object.hasOwn(GL, next.entry) || !Object.hasOwn(GL, next.exit) ||
+          typeof next.online !== 'boolean' || next.free !== next.slots.filter(s => s === 'free').length) {
+        throw new Error('Invalid parking state');
+      }
+      st = next; link = true; render(); sync();
+    } catch (_) { st.online = false; render(); }
+  };
+}
+// Đồng bộ vé đã lưu trong trình duyệt với trạng thái thật trong MySQL.
+async function sync() {
+  if (!ticket) return;
+  if (syncing) return syncing;
+  const code = ticket.code;
+  lastSyncAttempt = Date.now();
+  syncing = (async () => {
+  try {
+    const d = await api('/api/ticket?code=' + encodeURIComponent(code));
+    if (!ticket || ticket.code !== code) return;
+    if (d.error === 'TICKET_NOT_FOUND') return clearTicket();
+    if (['EXPIRED', 'CANCELLED', 'COMPLETED'].includes(d.status)) return clearTicket();
+    if (d.ok) rememberTicket(d);
+  } catch (_) {} finally { syncing = null; }
+  })();
+  return syncing;
+}
+setInterval(() => { if (link && ticket && Date.now() - lastSyncAttempt >= 5000) sync(); }, 5000);
+async function init() {
+  if (ticket && (!/^[A-Z0-9]{6}$/.test(ticket.code || '') ||
+      !['reserved','parked','exit_pending'].includes(ticket.status))) clearTicket();
+  showTicket();
+  try {
+    const d = await api('/api/config');
+    if (d.ok) cfg = d;
+  } catch (_) {}
+  const holdSec = cfg.holdSec ?? cfg.holdMin * 60;
+  $('holdNote').textContent = `Giữ mã ${holdSec} giây. Quá hạn mà chưa vào bãi, mã sẽ tự huỷ. Đã vào bãi thì giữ mã đến khi xe ra.`;
+  const billingPeriodSec = cfg.billingPeriodSec ?? 3600;
+  $('rateNote').textContent = `Giá ${vnd(cfg.rate)} / chu kỳ ${billingPeriodSec} giây, làm tròn lên theo chu kỳ. Xe đã vào vẫn giữ mã đến khi xe ra và cổng đóng.`;
+  if (DEMO) { link = true; st = {free: 2, total: 3, slots: ['free', 'busy', 'free'], entry: 'wait', exit: 'wait', online: true}; render(); }
+  else { render(); connect(); }
+}
+
+// ---- Dữ liệu giả cho chế độ ?demo ----
+const M = {code: '', slot: 0, plate: '', t0: 0, expiresAt: 0, status: 'RESERVED', fee: 0, hours: 0, parked: 0};
+async function mock(p, b) {
+  if (M.status === 'RESERVED' && M.code && M.expiresAt <= Date.now()) {
+    M.status = 'EXPIRED'; st.slots[M.slot - 1] = 'free'; st.free++; render();
+  }
+  if (p === '/api/config') return {ok: true, rate: 10000, holdSec: 30, holdMin: 0.5, billingPeriodSec: 60};
+  if (p === '/api/reserve') {
+    Object.assign(M, {code: Math.random().toString(36).slice(2, 8).toUpperCase(), slot: b.slot, plate: b.plate, t0: 0, expiresAt: Date.now() + 30000, status: 'RESERVED'});
+    st.slots[b.slot - 1] = 'reserved'; st.free--; render();
+    return {ok: true, code: M.code, slot: b.slot, expiresAt: M.expiresAt};
+  }
+  if (p === '/api/cancel') {
+    if (b.code !== M.code || M.status !== 'RESERVED') return {ok: false, msg: 'Chỉ huỷ được vé đang giữ chỗ'};
+    M.status = 'CANCELLED'; st.slots[M.slot - 1] = 'free'; st.free++; render(); return {ok: true};
+  }
+  if (b && b.code !== M.code) return {ok: false, msg: 'Không tìm thấy mã'};
+  if (p === '/api/checkin') {
+    if (M.status !== 'RESERVED') return {ok: false, msg: 'Mã này đã được sử dụng'};
+    M.t0 = Date.now(); M.status = 'PARKED'; st.slots[M.slot - 1] = 'busy'; render(); return {ok: true};
+  }
+  if (p === '/api/checkout/quote') {
+    if (!['PARKED', 'EXIT_PENDING'].includes(M.status)) return {ok: false, msg: 'Mã này chưa vào bãi hoặc đã trả bãi'};
+    if (M.status === 'PARKED') {
+      M.parked = Math.max(0, Math.floor((Date.now() - M.t0) / 1000));
+      M.hours = Math.max(1, Math.ceil(M.parked / 60)); M.fee = M.hours * 10000;
+    }
+    return {ok: true, code: M.code, slot: M.slot, status: M.status, plate: M.plate, parked_sec: M.parked, hours: M.hours, rate: 10000, fee: M.fee, billingPeriodSec: 60};
+  }
+  if (p === '/api/checkout/confirm') {
+    if (!['PARKED', 'EXIT_PENDING'].includes(M.status)) return {ok: false, msg: 'Mã này chưa vào bãi hoặc đã trả bãi'};
+    M.status = 'EXIT_PENDING'; st.exit = 'open'; render();
+    // Demo has no IR: deliberately keep the ticket pending rather than simulate an exit.
+    return {ok: true, code: M.code, slot: M.slot, plate: M.plate, status: M.status, fee: M.fee, gateAcknowledged: true};
+  }
+  if (p.startsWith('/api/ticket?')) return {ok: true, code: M.code, slot: M.slot, plate: M.plate, status: M.status, expiresAt: M.expiresAt};
+  return {ok: false, msg: 'API demo không được hỗ trợ'};
+}
+
+init();
+</script>
+</body>
+</html>
